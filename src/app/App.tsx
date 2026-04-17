@@ -304,11 +304,16 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="relative min-h-screen overflow-hidden bg-white">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_14%_16%,rgba(5,128,255,0.14),transparent_42%),radial-gradient(circle_at_86%_18%,rgba(23,94,255,0.1),transparent_40%),linear-gradient(180deg,#ffffff_0%,#f4f8ff_100%)]" />
+        <div className="absolute -top-28 left-[-8%] h-72 w-72 rounded-full bg-sky-300/30 blur-3xl" />
+        <div className="absolute -right-20 bottom-12 h-64 w-64 rounded-full bg-blue-300/25 blur-3xl" />
+      </div>
       <Toaster />
       
       {/* Header */}
-      <header className="bg-white border-b sticky top-0 z-10">
+      <header className="sticky top-0 z-20 border-b border-blue-100 bg-white/85 backdrop-blur">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -325,11 +330,12 @@ export default function App() {
               <Button 
                 variant="outline" 
                 size="sm"
+                className="border-blue-200 bg-white text-blue-800 hover:bg-blue-50"
                 onClick={handleResetData}
               >
                 Reset to Sample Data
               </Button>
-              <Card className="w-[300px]">
+              <Card className="w-[300px] border-blue-100 bg-white/90">
                 <CardContent className="p-3">
                   <div className="flex items-center gap-3">
                     <UserCircle className="h-10 w-10 text-blue-600" />
@@ -357,7 +363,7 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-6 py-8">
+      <main className="relative z-10 container mx-auto px-6 py-8">
         <div className="space-y-6">
           {/* Dashboard Metrics - Always visible */}
           <DashboardMetrics loans={loans} />
