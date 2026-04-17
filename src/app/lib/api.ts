@@ -21,6 +21,35 @@ export class ApiError extends Error {
   }
 }
 
+function extractApiErrorMessage(payload: unknown, fallbackStatus: number) {
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload;
+  }
+
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    const candidates = [record.message, record.error, record.detail, record.details];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate;
+      }
+    }
+
+    if (Array.isArray(record.errors)) {
+      const joined = record.errors
+        .map((item) => (typeof item === 'string' ? item : JSON.stringify(item)))
+        .filter(Boolean)
+        .join('; ');
+      if (joined) {
+        return joined;
+      }
+    }
+  }
+
+  return `Request failed with status ${fallbackStatus}`;
+}
+
 export type LoanQueueFilter = 'all' | 'unassigned' | 'mine' | 'action-required' | 'in-progress' | 'on-hold' | 'completed';
 
 export interface BackendUserProfile {
@@ -107,6 +136,15 @@ async function getFirebaseIdToken() {
   }
 
   return currentUser.getIdToken();
+}
+
+async function getFreshFirebaseIdToken() {
+  const currentUser = auth?.currentUser;
+  if (!currentUser) {
+    return null;
+  }
+
+  return currentUser.getIdToken(true);
 }
 
 function toNumber(value: unknown, fallback = 0) {
@@ -307,17 +345,31 @@ function normalizeBreadcrumbs(payload: unknown): LoanStatusBreadcrumb[] {
 
 async function requestJson<T>(path: string, options: RequestInit & { query?: Record<string, string | number | boolean | undefined>; requireAuth?: boolean } = {}) {
   const { query, requireAuth = true, headers, ...rest } = options;
-  const token = requireAuth ? await getFirebaseIdToken() : null;
+  const executeRequest = async (token: string | null) =>
+    fetch(`${joinUrl(path)}${buildQueryString(query)}`, {
+      ...rest,
+      cache: rest.cache ?? 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(rest.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(headers ?? {}),
+      },
+    });
 
-  const response = await fetch(`${joinUrl(path)}${buildQueryString(query)}`, {
-    ...rest,
-    headers: {
-      Accept: 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(rest.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(headers ?? {}),
-    },
-  });
+  let token = requireAuth ? await getFirebaseIdToken() : null;
+  let response = await executeRequest(token);
+
+  // Retry once with a forced token refresh to handle expired/stale Firebase ID tokens.
+  if (response.status === 401 && requireAuth) {
+    const refreshedToken = await getFreshFirebaseIdToken();
+    if (refreshedToken && refreshedToken !== token) {
+      token = refreshedToken;
+      response = await executeRequest(token);
+    }
+  }
 
   if (response.status === 401) {
     if (auth) {
@@ -335,7 +387,7 @@ async function requestJson<T>(path: string, options: RequestInit & { query?: Rec
       payload = await response.text();
     }
 
-    const message = typeof payload === 'string' && payload.trim() ? payload : `Request failed with status ${response.status}`;
+    const message = extractApiErrorMessage(payload, response.status);
     throw new ApiError(message, response.status, payload);
   }
 
@@ -382,9 +434,35 @@ export async function fetchLoanQueue(status: LoanQueueFilter) {
 }
 
 export async function submitLoanInstruction(payload: LoanInstructionPayload) {
+  const normalizedPriority = String(payload.priority).toLowerCase().includes('urgent')
+    ? 'urgent'
+    : String(payload.priority).toLowerCase().includes('high')
+      ? 'high'
+      : 'normal';
+
+  const requestPayload = {
+    // Keep flat fields for backward compatibility with older API handlers.
+    ...payload,
+
+    // Backend contract expects nested instruction + checklist.
+    instruction: {
+      loanId: payload.loanId,
+      beneficiaryName: payload.beneficiaryName,
+      accountNumber: payload.accountNumber,
+      bankCode: payload.bankCode,
+      amount: payload.amount,
+      approverId: payload.approverId,
+      approverName: payload.approverName,
+    },
+    checklist: payload.checklist,
+    priority: normalizedPriority,
+    documents: [],
+    finalApproverName: payload.approverName,
+  };
+
   const response = await requestJson<unknown>('/api/loans/instructions', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(requestPayload),
   });
 
   if (response && typeof response === 'object') {

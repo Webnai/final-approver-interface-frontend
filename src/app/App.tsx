@@ -45,6 +45,7 @@ export default function App() {
     };
   }, [backendUser, authenticatedUser]);
 
+  // Phase 1: Initialize Firebase auth state
   useEffect(() => {
     if (!auth || !isFirebaseConfigured) {
       dispatch(setAuthInitialized(true));
@@ -82,6 +83,7 @@ export default function App() {
     return unsubscribe;
   }, [dispatch]);
 
+  // Phase 2: Load backend user profile with delay to ensure Firebase is ready
   useEffect(() => {
     if (!initialized || !authenticatedUser) {
       setBackendUser(null);
@@ -119,10 +121,16 @@ export default function App() {
       }
     };
 
-    void loadProfile();
+    // Add delay to ensure Firebase session is fully persisted and auth.currentUser is set
+    const timeoutId = setTimeout(() => {
+      if (!cancelled) {
+        void loadProfile();
+      }
+    }, 200);
 
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
     };
   }, [authenticatedUser, initialized]);
 
@@ -148,79 +156,77 @@ export default function App() {
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_14%_16%,rgba(5,128,255,0.14),transparent_42%),radial-gradient(circle_at_86%_18%,rgba(23,94,255,0.1),transparent_40%),linear-gradient(180deg,#ffffff_0%,#f4f8ff_100%)]" />
         <div className="absolute -top-28 left-[-8%] h-72 w-72 rounded-full bg-sky-300/30 blur-3xl" />
-        <div className="absolute -right-20 bottom-12 h-64 w-64 rounded-full bg-blue-300/25 blur-3xl" />
+        <div className="absolute -right-16 bottom-6 h-64 w-64 rounded-full bg-blue-300/30 blur-3xl" />
       </div>
-      <Toaster />
 
-      <header className="sticky top-0 z-20 border-b border-blue-100 bg-white/85 backdrop-blur">
-        <div className="container mx-auto px-6 py-4">
+      <div className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col">
+        <div className="border-b border-sky-200 bg-white/50 px-6 py-3 backdrop-blur-md">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <img src={bayportLogo} alt="Bayport" className="h-10 w-auto object-contain" />
+              <img src={bayportLogo} alt="Bayport" className="h-8 w-auto" />
               <div>
-                <h1 className="text-2xl font-bold">Loan Disbursement System</h1>
-                <p className="text-sm text-muted-foreground">Backend-driven workflow management</p>
+                <h1 className="text-lg font-semibold text-slate-900">Final Approver Interface</h1>
+                <p className="text-xs text-slate-500">{currentUser.name}</p>
               </div>
             </div>
 
-            <Card className="w-full max-w-sm border-blue-100 bg-white/90">
-              <CardContent className="p-3">
-                <div className="flex items-center gap-3">
-                  <UserCircle className="h-10 w-10 text-blue-600" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium leading-none">{currentUser.name}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">{currentUser.role}</p>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">{authenticatedUser.email}</p>
-                    {profileLoading && <p className="mt-1 text-xs text-blue-600">Syncing profile...</p>}
-                    {profileError && <p className="mt-1 text-xs text-amber-700">{profileError}</p>}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Sign out"
-                    onClick={() => {
-                      dispatch(signOutUser());
-                    }}
-                  >
-                    <LogOut className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <div className="flex items-center gap-3">
+              <div className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-800">
+                <UserCircle className="h-3.5 w-3.5" />
+                {currentUser.role}
+              </div>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => dispatch(signOutUser())}
+                className="gap-2 text-slate-600 hover:text-slate-900"
+              >
+                <LogOut className="h-4 w-4" />
+                Sign Out
+              </Button>
+            </div>
           </div>
         </div>
-      </header>
 
-      <main className="relative z-10 container mx-auto px-6 py-8">
-        <div className="space-y-6">
-          <DashboardMetrics />
+        <div className="flex-1 overflow-auto p-6">
+          <div className="mx-auto max-w-6xl space-y-6">
+            {profileError && (
+              <Card className="border-amber-200 bg-amber-50">
+                <CardContent className="pt-6 text-sm text-amber-800">{profileError}</CardContent>
+              </Card>
+            )}
 
-          {currentUser.role === 'Final Approver' && (
-            <ApproverDashboard currentUser={currentUser} />
-          )}
+            {currentUser.role === 'Final Approver' && (
+              <>
+                <DashboardMetrics />
+                <ApproverDashboard currentUser={currentUser} />
+              </>
+            )}
 
-          {currentUser.role === 'Disbursement Officer' && (
-            <WorkQueue currentUser={currentUser} />
-          )}
+            {currentUser.role === 'Disbursement Officer' && <WorkQueue currentUser={currentUser} />}
 
-          {currentUser.role === 'Supervisor' && (
-            <Tabs defaultValue="overview" className="space-y-6">
-              <TabsList>
-                <TabsTrigger value="overview">Officer Overview</TabsTrigger>
-                <TabsTrigger value="queue">Full Queue</TabsTrigger>
-              </TabsList>
+            {currentUser.role === 'Supervisor' && (
+              <Tabs defaultValue="overview" className="space-y-6">
+                <TabsList>
+                  <TabsTrigger value="overview">Overview</TabsTrigger>
+                  <TabsTrigger value="capacity">Officer Capacity</TabsTrigger>
+                </TabsList>
 
-              <TabsContent value="overview">
-                <SupervisorView />
-              </TabsContent>
+                <TabsContent value="overview" className="space-y-6">
+                  <DashboardMetrics />
+                </TabsContent>
 
-              <TabsContent value="queue">
-                <WorkQueue currentUser={currentUser} />
-              </TabsContent>
-            </Tabs>
-          )}
+                <TabsContent value="capacity">
+                  <SupervisorView />
+                </TabsContent>
+              </Tabs>
+            )}
+          </div>
         </div>
-      </main>
+      </div>
+
+      <Toaster />
     </div>
   );
 }
