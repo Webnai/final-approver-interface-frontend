@@ -1,49 +1,47 @@
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Badge } from '@/app/components/ui/badge';
 import { Progress } from '@/app/components/ui/progress';
-import { LoanRecord } from '@/app/types/loan';
+import { SupervisorCapacityData, fetchSupervisorCapacity } from '@/app/lib/api';
 import { Users, TrendingUp, Clock, AlertTriangle } from 'lucide-react';
 
-interface SupervisorViewProps {
-  loans: LoanRecord[];
-}
+export function SupervisorView() {
+  const [capacity, setCapacity] = useState<SupervisorCapacityData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-export function SupervisorView({ loans }: SupervisorViewProps) {
-  // Get unique officers and their workload
-  const officerWorkload = loans
-    .filter(l => l.assignedOfficerId && l.status !== 'Completed')
-    .reduce((acc, loan) => {
-      const officer = loan.assignedOfficer!;
-      if (!acc[officer]) {
-        acc[officer] = {
-          name: officer,
-          activeLoans: 0,
-          totalValue: 0,
-          avgAge: 0,
-          ages: []
-        };
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCapacity = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const data = await fetchSupervisorCapacity();
+        if (!cancelled) {
+          setCapacity(data);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : 'Unable to load supervisor capacity.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-      acc[officer].activeLoans++;
-      acc[officer].totalValue += loan.amount;
-      const age = (Date.now() - loan.createdAt.getTime()) / (1000 * 60 * 60);
-      acc[officer].ages.push(age);
-      return acc;
-    }, {} as Record<string, { name: string; activeLoans: number; totalValue: number; avgAge: number; ages: number[] }>);
+    };
 
-  // Calculate average ages
-  Object.values(officerWorkload).forEach(officer => {
-    officer.avgAge = officer.ages.reduce((sum, age) => sum + age, 0) / officer.ages.length;
-  });
+    void loadCapacity();
 
-  const maxLoans = Math.max(...Object.values(officerWorkload).map(o => o.activeLoans), 5);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  // Overall statistics
-  const totalPending = loans.filter(l => l.status !== 'Completed').length;
-  const totalUnassigned = loans.filter(l => l.status === 'Unassigned').length;
-  const avgProcessingTime = loans.filter(l => l.completedAt && l.claimedAt).reduce((sum, loan) => {
-    const time = (loan.completedAt!.getTime() - loan.claimedAt!.getTime()) / (1000 * 60 * 60);
-    return sum + time;
-  }, 0) / Math.max(loans.filter(l => l.completedAt && l.claimedAt).length, 1);
+  const officerWorkload = capacity?.officers ?? [];
+  const maxLoans = Math.max(...officerWorkload.map((officer) => officer.activeLoans), 5);
 
   return (
     <div className="space-y-6">
@@ -54,7 +52,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
             <Clock className="h-4 w-4 text-blue-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalPending}</div>
+            <div className="text-2xl font-bold">{capacity?.totalPending ?? 0}</div>
             <p className="text-xs text-muted-foreground">
               Across all officers
             </p>
@@ -67,7 +65,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
             <AlertTriangle className="h-4 w-4 text-orange-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{totalUnassigned}</div>
+            <div className="text-2xl font-bold">{capacity?.unassigned ?? 0}</div>
             <p className="text-xs text-muted-foreground">
               Waiting to be claimed
             </p>
@@ -80,7 +78,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
             <Users className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{Object.keys(officerWorkload).length}</div>
+            <div className="text-2xl font-bold">{capacity?.activeOfficers ?? officerWorkload.length}</div>
             <p className="text-xs text-muted-foreground">
               Currently processing loans
             </p>
@@ -93,7 +91,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
             <TrendingUp className="h-4 w-4 text-purple-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{avgProcessingTime.toFixed(1)}h</div>
+            <div className="text-2xl font-bold">{(capacity?.averageProcessingHours ?? 0).toFixed(1)}h</div>
             <p className="text-xs text-muted-foreground">
               Claim to completion
             </p>
@@ -109,13 +107,15 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {Object.keys(officerWorkload).length === 0 ? (
+          {error && !loading && !capacity ? (
+            <p className="text-center text-muted-foreground py-8">{error}</p>
+          ) : officerWorkload.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">
-              No active assignments
+              {loading ? 'Loading capacity data...' : 'No active assignments'}
             </p>
           ) : (
             <div className="space-y-6">
-              {Object.values(officerWorkload).map(officer => (
+              {officerWorkload.map((officer) => (
                 <div key={officer.name} className="space-y-2">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -134,7 +134,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
                     <div className="text-right">
                       <p className="font-semibold">${officer.totalValue.toLocaleString()}</p>
                       <p className="text-sm text-muted-foreground">
-                        Avg age: {officer.avgAge.toFixed(1)}h
+                        Avg age: {officer.averageAgeHours.toFixed(1)}h
                       </p>
                     </div>
                   </div>
@@ -145,7 +145,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
                     </div>
                     <Progress value={(officer.activeLoans / maxLoans) * 100} />
                   </div>
-                  {officer.avgAge > 24 && (
+                  {officer.isStale && (
                     <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200">
                       <AlertTriangle className="h-3 w-3 mr-1" />
                       Has stale applications
@@ -170,12 +170,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
                 <p className="text-sm text-muted-foreground">Disbursements finalized</p>
               </div>
               <Badge variant="secondary" className="text-lg">
-                {loans.filter(l => {
-                  if (!l.completedAt) return false;
-                  const today = new Date();
-                  today.setHours(0, 0, 0, 0);
-                  return l.completedAt >= today;
-                }).length}
+                0
               </Badge>
             </div>
 
@@ -185,9 +180,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
                 <p className="text-sm text-muted-foreground">Completion percentage</p>
               </div>
               <Badge variant="secondary" className="text-lg">
-                {loans.length > 0 
-                  ? ((loans.filter(l => l.status === 'Completed').length / loans.length) * 100).toFixed(0)
-                  : 0}%
+                0%
               </Badge>
             </div>
 
@@ -197,10 +190,7 @@ export function SupervisorView({ loans }: SupervisorViewProps) {
                 <p className="text-sm text-muted-foreground">Successfully disbursed</p>
               </div>
               <Badge variant="secondary" className="text-lg">
-                ${loans
-                  .filter(l => l.status === 'Completed')
-                  .reduce((sum, l) => sum + l.amount, 0)
-                  .toLocaleString()}
+                ${(0).toLocaleString()}
               </Badge>
             </div>
           </div>

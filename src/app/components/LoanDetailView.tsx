@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, CheckCircle2, Copy, FileText, Pause, Send, XCircle } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { Badge } from '@/app/components/ui/badge';
@@ -20,21 +20,79 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/app/components/ui/alert-dialog';
+import { ApiError, completeLoan, getLoanPackage, getStatusBreadcrumbs, postLoanComment, putLoanOnHold, returnLoanToApprover } from '@/app/lib/api';
 
 interface LoanDetailViewProps {
   loan: LoanRecord;
   currentUser: User;
   onBack: () => void;
-  onUpdate: (loan: LoanRecord) => void;
+  onChanged?: () => void | Promise<void>;
 }
 
-export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDetailViewProps) {
+export function LoanDetailView({ loan, currentUser, onBack, onChanged }: LoanDetailViewProps) {
+  const [detailLoan, setDetailLoan] = useState<LoanRecord>(loan);
+  const [breadcrumbs, setBreadcrumbs] = useState<Array<{ id: string; label: string; status: LoanRecord['status']; timestamp: Date; actor?: string; note?: string }>>([]);
   const [transactionRef, setTransactionRef] = useState(loan.transactionReference || '');
   const [commentText, setCommentText] = useState('');
   const [returnReason, setReturnReason] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const isOwner = loan.assignedOfficerId === currentUser.id;
-  const isReadOnly = !isOwner || loan.status === 'Completed';
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLoanDetail = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const [packageLoan, statusBreadcrumbs] = await Promise.all([
+          getLoanPackage(loan.id),
+          getStatusBreadcrumbs(loan.id),
+        ]);
+
+        if (!cancelled) {
+          setDetailLoan(packageLoan);
+          setBreadcrumbs(statusBreadcrumbs);
+          setTransactionRef(packageLoan.transactionReference || '');
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : 'Unable to load this loan.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadLoanDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loan.id]);
+
+  useEffect(() => {
+    setTransactionRef(detailLoan.transactionReference || '');
+  }, [detailLoan.transactionReference]);
+
+  const refreshDetail = async () => {
+    try {
+      const packageLoan = await getLoanPackage(loan.id);
+      const statusBreadcrumbs = await getStatusBreadcrumbs(loan.id);
+      setDetailLoan(packageLoan);
+      setBreadcrumbs(statusBreadcrumbs);
+      setTransactionRef(packageLoan.transactionReference || '');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to refresh this loan.');
+    }
+  };
+
+  const isOwner = detailLoan.assignedOfficerId === currentUser.id;
+  const isReadOnly = !isOwner || detailLoan.status === 'Completed';
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -49,17 +107,30 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
       userId: currentUser.id,
       userName: currentUser.name,
       message: commentText,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
-    const updatedLoan = {
-      ...loan,
-      comments: [...loan.comments, newComment]
+    const addComment = async () => {
+      setIsSaving(true);
+      try {
+        await postLoanComment(detailLoan.id, commentText.trim());
+        setDetailLoan((current) => ({
+          ...current,
+          comments: [...current.comments, newComment],
+        }));
+        setCommentText('');
+        toast.success('Comment added');
+        await refreshDetail();
+        await onChanged?.();
+      } catch (requestError) {
+        const message = requestError instanceof ApiError ? requestError.message : 'Unable to add the comment.';
+        toast.error(message);
+      } finally {
+        setIsSaving(false);
+      }
     };
 
-    onUpdate(updatedLoan);
-    setCommentText('');
-    toast.success('Comment added');
+    void addComment();
   };
 
   const handleMarkComplete = () => {
@@ -68,26 +139,52 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
       return;
     }
 
-    const updatedLoan: LoanRecord = {
-      ...loan,
-      status: 'Completed',
-      transactionReference: transactionRef,
-      completedAt: new Date()
+    const complete = async () => {
+      setIsSaving(true);
+      try {
+        await completeLoan(detailLoan.id, transactionRef.trim());
+        setDetailLoan((current) => ({
+          ...current,
+          status: 'Completed',
+          transactionReference: transactionRef.trim(),
+          completedAt: new Date(),
+        }));
+        toast.success('Loan marked as disbursed');
+        await refreshDetail();
+        await onChanged?.();
+        onBack();
+      } catch (requestError) {
+        const message = requestError instanceof ApiError ? requestError.message : 'Unable to complete this loan.';
+        toast.error(message);
+      } finally {
+        setIsSaving(false);
+      }
     };
 
-    onUpdate(updatedLoan);
-    toast.success('Loan marked as disbursed');
-    onBack();
+    void complete();
   };
 
   const handlePutOnHold = () => {
-    const updatedLoan: LoanRecord = {
-      ...loan,
-      status: 'On Hold'
+    const hold = async () => {
+      setIsSaving(true);
+      try {
+        await putLoanOnHold(detailLoan.id);
+        setDetailLoan((current) => ({
+          ...current,
+          status: 'On Hold',
+        }));
+        toast.success('Loan put on hold');
+        await refreshDetail();
+        await onChanged?.();
+      } catch (requestError) {
+        const message = requestError instanceof ApiError ? requestError.message : 'Unable to put this loan on hold.';
+        toast.error(message);
+      } finally {
+        setIsSaving(false);
+      }
     };
 
-    onUpdate(updatedLoan);
-    toast.success('Loan put on hold');
+    void hold();
   };
 
   const handleReturnToApprover = () => {
@@ -96,27 +193,42 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
       return;
     }
 
-    const returnComment: Comment = {
-      id: Date.now().toString(),
-      userId: currentUser.id,
-      userName: currentUser.name,
-      message: `🔴 RETURNED TO APPROVER: ${returnReason}`,
-      timestamp: new Date(),
-      mentionedUser: loan.approverId
+    const returnLoan = async () => {
+      setIsSaving(true);
+      try {
+        await returnLoanToApprover(detailLoan.id, returnReason.trim());
+        const returnComment: Comment = {
+          id: Date.now().toString(),
+          userId: currentUser.id,
+          userName: currentUser.name,
+          message: `🔴 RETURNED TO APPROVER: ${returnReason}`,
+          timestamp: new Date(),
+          mentionedUser: detailLoan.approverId,
+        };
+
+        setDetailLoan((current) => ({
+          ...current,
+          status: 'Action Required',
+          assignedOfficer: undefined,
+          assignedOfficerId: undefined,
+          comments: [...current.comments, returnComment],
+        }));
+        toast.success('Loan returned to approver');
+        await refreshDetail();
+        await onChanged?.();
+        onBack();
+      } catch (requestError) {
+        const message = requestError instanceof ApiError ? requestError.message : 'Unable to return this loan.';
+        toast.error(message);
+      } finally {
+        setIsSaving(false);
+      }
     };
 
-    const updatedLoan: LoanRecord = {
-      ...loan,
-      status: 'Action Required',
-      assignedOfficer: undefined,
-      assignedOfficerId: undefined,
-      comments: [...loan.comments, returnComment]
-    };
-
-    onUpdate(updatedLoan);
-    toast.success('Loan returned to approver');
-    onBack();
+    void returnLoan();
   };
+
+  const currentLoan = detailLoan;
 
   return (
     <div className="space-y-6">
@@ -125,10 +237,16 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back to Queue
         </Button>
-        <Badge className={loan.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}>
-          {loan.status}
+        <Badge className={currentLoan.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}>
+          {currentLoan.status}
         </Badge>
       </div>
+
+      {error ? (
+        <Card>
+          <CardContent className="p-6 text-sm text-muted-foreground">{error}</CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Main Disbursement Package */}
@@ -148,11 +266,11 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                 <div className="space-y-2">
                   <Label>Loan Reference ID</Label>
                   <div className="flex gap-2">
-                    <Input value={loan.loanId} readOnly className="bg-gray-50" />
+                    <Input value={currentLoan.loanId} readOnly className="bg-gray-50" />
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => copyToClipboard(loan.loanId, 'Loan ID')}
+                      onClick={() => copyToClipboard(currentLoan.loanId, 'Loan ID')}
                     >
                       <Copy className="h-4 w-4" />
                     </Button>
@@ -162,11 +280,11 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                 <div className="space-y-2">
                   <Label>Priority</Label>
                   <Badge variant="outline" className={
-                    loan.priority === 'Urgent' ? 'bg-red-100 text-red-800' :
-                    loan.priority === 'High Value' ? 'bg-purple-100 text-purple-800' :
+                    currentLoan.priority === 'Urgent' ? 'bg-red-100 text-red-800' :
+                    currentLoan.priority === 'High Value' ? 'bg-purple-100 text-purple-800' :
                     'bg-gray-100 text-gray-800'
                   }>
-                    {loan.priority}
+                    {currentLoan.priority}
                   </Badge>
                 </div>
               </div>
@@ -174,11 +292,11 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
               <div className="space-y-2">
                 <Label>Beneficiary Name</Label>
                 <div className="flex gap-2">
-                  <Input value={loan.beneficiaryName} readOnly className="bg-gray-50" />
+                  <Input value={currentLoan.beneficiaryName} readOnly className="bg-gray-50" />
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => copyToClipboard(loan.beneficiaryName, 'Beneficiary Name')}
+                    onClick={() => copyToClipboard(currentLoan.beneficiaryName, 'Beneficiary Name')}
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -189,11 +307,11 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                 <div className="space-y-2">
                   <Label>Account Number</Label>
                   <div className="flex gap-2">
-                    <Input value={loan.accountNumber} readOnly className="bg-gray-50" />
+                    <Input value={currentLoan.accountNumber} readOnly className="bg-gray-50" />
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => copyToClipboard(loan.accountNumber, 'Account Number')}
+                      onClick={() => copyToClipboard(currentLoan.accountNumber, 'Account Number')}
                     >
                       <Copy className="h-4 w-4" />
                     </Button>
@@ -203,11 +321,11 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                 <div className="space-y-2">
                   <Label>Bank Code / SWIFT</Label>
                   <div className="flex gap-2">
-                    <Input value={loan.bankCode} readOnly className="bg-gray-50" />
+                    <Input value={currentLoan.bankCode} readOnly className="bg-gray-50" />
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => copyToClipboard(loan.bankCode, 'Bank Code')}
+                      onClick={() => copyToClipboard(currentLoan.bankCode, 'Bank Code')}
                     >
                       <Copy className="h-4 w-4" />
                     </Button>
@@ -219,14 +337,14 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                 <Label>Amount ($)</Label>
                 <div className="flex gap-2">
                   <Input 
-                    value={`$${loan.amount.toLocaleString()}`} 
+                    value={`$${currentLoan.amount.toLocaleString()}`} 
                     readOnly 
                     className="bg-yellow-50 font-bold text-lg"
                   />
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => copyToClipboard(loan.amount.toString(), 'Amount')}
+                    onClick={() => copyToClipboard(currentLoan.amount.toString(), 'Amount')}
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -249,11 +367,11 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                 </p>
               </div>
 
-              {isOwner && loan.status !== 'Completed' && (
+              {isOwner && currentLoan.status !== 'Completed' && (
                 <div className="flex gap-2 pt-4">
                   <Button
                     onClick={handleMarkComplete}
-                    disabled={!transactionRef.trim()}
+                    disabled={!transactionRef.trim() || isSaving}
                     className="flex-1"
                   >
                     <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -262,6 +380,7 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                   <Button
                     variant="outline"
                     onClick={handlePutOnHold}
+                    disabled={isSaving}
                   >
                     <Pause className="mr-2 h-4 w-4" />
                     Put on Hold
@@ -285,6 +404,7 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                         value={returnReason}
                         onChange={(e) => setReturnReason(e.target.value)}
                         rows={3}
+                        disabled={isSaving}
                       />
                       <AlertDialogFooter>
                         <AlertDialogCancel onClick={() => setReturnReason('')}>Cancel</AlertDialogCancel>
@@ -306,7 +426,7 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {Object.entries(loan.checklist).map(([key, value]) => (
+                {Object.entries(currentLoan.checklist).map(([key, value]) => (
                   <div key={key} className="flex items-center gap-2">
                     <CheckCircle2 className={`h-4 w-4 ${value ? 'text-green-600' : 'text-gray-300'}`} />
                     <span className="text-sm">
@@ -328,29 +448,61 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
             <CardContent className="space-y-3 text-sm">
               <div>
                 <span className="text-muted-foreground">Approved by:</span>
-                <p className="font-medium">{loan.approverName}</p>
+                <p className="font-medium">{currentLoan.approverName}</p>
               </div>
-              {loan.assignedOfficer && (
+              {currentLoan.assignedOfficer && (
                 <div>
                   <span className="text-muted-foreground">Assigned to:</span>
-                  <p className="font-medium">{loan.assignedOfficer}</p>
+                  <p className="font-medium">{currentLoan.assignedOfficer}</p>
                 </div>
               )}
               <div>
                 <span className="text-muted-foreground">Created:</span>
-                <p className="font-medium">{loan.createdAt.toLocaleString()}</p>
+                <p className="font-medium">{currentLoan.createdAt.toLocaleString()}</p>
               </div>
-              {loan.claimedAt && (
+              {currentLoan.claimedAt && (
                 <div>
                   <span className="text-muted-foreground">Claimed:</span>
-                  <p className="font-medium">{loan.claimedAt.toLocaleString()}</p>
+                  <p className="font-medium">{currentLoan.claimedAt.toLocaleString()}</p>
                 </div>
               )}
-              {loan.completedAt && (
+              {currentLoan.completedAt && (
                 <div>
                   <span className="text-muted-foreground">Completed:</span>
-                  <p className="font-medium">{loan.completedAt.toLocaleString()}</p>
+                  <p className="font-medium">{currentLoan.completedAt.toLocaleString()}</p>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Status Breadcrumbs</CardTitle>
+              <CardDescription>Backend workflow milestones for this loan</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {loading ? (
+                <p className="text-sm text-muted-foreground">Loading status breadcrumbs...</p>
+              ) : breadcrumbs.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No status breadcrumbs available.</p>
+              ) : (
+                breadcrumbs.map((breadcrumb) => (
+                  <div key={breadcrumb.id} className="rounded-lg border bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="font-medium">{breadcrumb.label}</p>
+                        <p className="text-xs text-muted-foreground">{breadcrumb.status}</p>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{breadcrumb.timestamp.toLocaleString()}</p>
+                    </div>
+                    {(breadcrumb.actor || breadcrumb.note) && (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {breadcrumb.actor ? `${breadcrumb.actor}${breadcrumb.note ? ' · ' : ''}` : ''}
+                        {breadcrumb.note ?? ''}
+                      </p>
+                    )}
+                  </div>
+                ))
               )}
             </CardContent>
           </Card>
@@ -362,12 +514,12 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                {loan.comments.length === 0 ? (
+                {currentLoan.comments.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">
                     No comments yet
                   </p>
                 ) : (
-                  loan.comments.map(comment => (
+                  currentLoan.comments.map(comment => (
                     <div key={comment.id} className="bg-slate-50 rounded-lg p-3 space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-sm">{comment.userName}</span>
@@ -388,11 +540,12 @@ export function LoanDetailView({ loan, currentUser, onBack, onUpdate }: LoanDeta
                     value={commentText}
                     onChange={(e) => setCommentText(e.target.value)}
                     rows={3}
+                    disabled={isSaving}
                   />
                   <Button
                     size="sm"
-                    onClick={handleAddComment}
-                    disabled={!commentText.trim()}
+                    onClick={() => void handleAddComment()}
+                    disabled={!commentText.trim() || isSaving}
                     className="w-full"
                   >
                     <Send className="mr-2 h-4 w-4" />

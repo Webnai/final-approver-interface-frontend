@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Clock, Copy, ExternalLink, Hand, Lock, MessageSquare, XCircle } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { Badge } from '@/app/components/ui/badge';
@@ -7,32 +7,50 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { LoanRecord, User } from '@/app/types/loan';
 import { toast } from 'sonner';
 import { LoanDetailView } from './LoanDetailView';
+import { ApiError, claimLoan, fetchLoanQueue } from '@/app/lib/api';
 
 interface WorkQueueProps {
-  loans: LoanRecord[];
   currentUser: User;
-  onClaimLoan: (loanId: string) => void;
-  onUpdateLoan: (loan: LoanRecord) => void;
 }
 
-export function WorkQueue({ loans, currentUser, onClaimLoan, onUpdateLoan }: WorkQueueProps) {
+export function WorkQueue({ currentUser }: WorkQueueProps) {
   const [selectedLoan, setSelectedLoan] = useState<LoanRecord | null>(null);
   const [filter, setFilter] = useState<'all' | 'unassigned' | 'mine'>('all');
+  const [loans, setLoans] = useState<LoanRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filteredLoans = loans.filter(loan => {
-    if (loan.status === 'Completed') return false;
-    
-    if (filter === 'unassigned') {
-      return loan.status === 'Unassigned';
-    } else if (filter === 'mine') {
-      return loan.assignedOfficerId === currentUser.id;
+  const loadQueue = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await fetchLoanQueue(filter);
+      setLoans(data);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load the work queue.');
+    } finally {
+      setLoading(false);
     }
-    return true;
-  });
+  };
 
-  const handleClaim = (loan: LoanRecord) => {
-    onClaimLoan(loan.id);
-    toast.success(`Claimed loan ${loan.loanId}`);
+  useEffect(() => {
+    void loadQueue();
+  }, [filter, currentUser.id]);
+
+  const filteredLoans = filter === 'mine'
+    ? loans.filter((loan) => loan.assignedOfficerId === currentUser.id)
+    : loans;
+
+  const handleClaim = async (loan: LoanRecord) => {
+    try {
+      await claimLoan(loan.id);
+      toast.success(`Claimed loan ${loan.loanId}`);
+      await loadQueue();
+    } catch (requestError) {
+      const message = requestError instanceof ApiError ? requestError.message : 'Unable to claim this loan.';
+      toast.error(message);
+    }
   };
 
   const copyToClipboard = (text: string, label: string) => {
@@ -87,7 +105,7 @@ export function WorkQueue({ loans, currentUser, onClaimLoan, onUpdateLoan }: Wor
         loan={selectedLoan}
         currentUser={currentUser}
         onBack={() => setSelectedLoan(null)}
-        onUpdate={onUpdateLoan}
+        onChanged={loadQueue}
       />
     );
   }
@@ -108,26 +126,30 @@ export function WorkQueue({ loans, currentUser, onClaimLoan, onUpdateLoan }: Wor
               size="sm"
               onClick={() => setFilter('all')}
             >
-              All ({loans.filter(l => l.status !== 'Completed').length})
+              All
             </Button>
             <Button
               variant={filter === 'unassigned' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('unassigned')}
             >
-              Unassigned ({loans.filter(l => l.status === 'Unassigned').length})
+              Unassigned
             </Button>
             <Button
               variant={filter === 'mine' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilter('mine')}
             >
-              My Tasks ({loans.filter(l => l.assignedOfficerId === currentUser.id && l.status !== 'Completed').length})
+              My Tasks
             </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent>
+        {error && !loading && loans.length === 0 ? (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>
+        ) : null}
+
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -146,7 +168,7 @@ export function WorkQueue({ loans, currentUser, onClaimLoan, onUpdateLoan }: Wor
               {filteredLoans.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                    No loans in queue
+                    {loading ? 'Loading queue...' : 'No loans in queue'}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -228,7 +250,7 @@ export function WorkQueue({ loans, currentUser, onClaimLoan, onUpdateLoan }: Wor
                             <Button
                               variant="default"
                               size="sm"
-                              onClick={() => handleClaim(loan)}
+                              onClick={() => void handleClaim(loan)}
                             >
                               <Hand className="mr-2 h-4 w-4" />
                               Claim
@@ -261,6 +283,9 @@ export function WorkQueue({ loans, currentUser, onClaimLoan, onUpdateLoan }: Wor
             </TableBody>
           </Table>
         </div>
+        {loading && loans.length > 0 ? (
+          <p className="mt-3 text-sm text-muted-foreground">Refreshing queue...</p>
+        ) : null}
       </CardContent>
     </Card>
   );

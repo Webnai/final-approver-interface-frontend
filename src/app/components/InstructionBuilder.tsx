@@ -7,12 +7,13 @@ import { Input } from '@/app/components/ui/input';
 import { Label } from '@/app/components/ui/label';
 import { Checkbox } from '@/app/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
-import { LoanRecord, Priority, User } from '@/app/types/loan';
+import { Priority, User } from '@/app/types/loan';
 import { toast } from 'sonner';
+import { ApiError, submitLoanInstruction } from '@/app/lib/api';
 
 interface InstructionBuilderProps {
   currentUser: User;
-  onSubmit: (loan: Omit<LoanRecord, 'id' | 'status' | 'createdAt' | 'comments'>) => void;
+  onSubmitted?: () => void;
 }
 
 interface FormData {
@@ -24,8 +25,10 @@ interface FormData {
   priority: Priority;
 }
 
-export function InstructionBuilder({ currentUser, onSubmit }: InstructionBuilderProps) {
+export function InstructionBuilder({ currentUser, onSubmitted }: InstructionBuilderProps) {
   const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   
   const [checklist, setChecklist] = useState({
     idVerified: false,
@@ -47,13 +50,13 @@ export function InstructionBuilder({ currentUser, onSubmit }: InstructionBuilder
 
   const allChecksPassed = Object.values(checklist).every(v => v);
 
-  const onFormSubmit = (data: FormData) => {
+  const onFormSubmit = async (data: FormData) => {
     if (!allChecksPassed) {
       toast.error('Please complete all eligibility checks before submitting');
       return;
     }
 
-    const loan: Omit<LoanRecord, 'id' | 'status' | 'createdAt' | 'comments'> = {
+    const loanPayload = {
       loanId: data.loanId,
       beneficiaryName: data.beneficiaryName,
       accountNumber: data.accountNumber,
@@ -65,20 +68,32 @@ export function InstructionBuilder({ currentUser, onSubmit }: InstructionBuilder
       approverId: currentUser.id
     };
 
-    onSubmit(loan);
-    
-    // Reset form
-    reset();
-    setChecklist({
-      idVerified: false,
-      collateralSigned: false,
-      sanctionsCheckCleared: false,
-      creditScoreVerified: false,
-      kycCompleted: false
-    });
-    setPriority('Normal');
-    
-    toast.success('Disbursement instruction submitted successfully');
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      await submitLoanInstruction({
+        ...loanPayload,
+      });
+
+      reset();
+      setChecklist({
+        idVerified: false,
+        collateralSigned: false,
+        sanctionsCheckCleared: false,
+        creditScoreVerified: false,
+        kycCompleted: false
+      });
+      setPriority('Normal');
+      onSubmitted?.();
+      toast.success('Disbursement instruction submitted successfully');
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : 'Unable to submit the instruction.';
+      setSubmitError(message);
+      toast.error(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -97,6 +112,12 @@ export function InstructionBuilder({ currentUser, onSubmit }: InstructionBuilder
         </div>
       </CardHeader>
       <CardContent>
+        {submitError && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            {submitError}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
           {/* Eligibility Validation Checklist */}
           <div className="space-y-3">
@@ -211,10 +232,10 @@ export function InstructionBuilder({ currentUser, onSubmit }: InstructionBuilder
           <Button 
             type="submit" 
             className="w-full" 
-            disabled={!allChecksPassed}
+            disabled={!allChecksPassed || isSubmitting}
           >
             <Send className="mr-2 h-4 w-4" />
-            Send to Disbursement Team
+            {isSubmitting ? 'Submitting...' : 'Send to Disbursement Team'}
           </Button>
         </form>
       </CardContent>

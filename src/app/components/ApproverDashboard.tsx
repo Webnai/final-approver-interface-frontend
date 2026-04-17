@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Clock, Eye } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { Badge } from '@/app/components/ui/badge';
@@ -8,23 +8,79 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/ta
 import { LoanRecord, User } from '@/app/types/loan';
 import { InstructionBuilder } from './InstructionBuilder';
 import { LoanDetailView } from './LoanDetailView';
+import { fetchLoanQueue } from '@/app/lib/api';
 
 interface ApproverDashboardProps {
-  loans: LoanRecord[];
   currentUser: User;
-  onSubmitLoan: (loan: Omit<LoanRecord, 'id' | 'status' | 'createdAt' | 'comments'>) => void;
-  onUpdateLoan: (loan: LoanRecord) => void;
 }
 
-export function ApproverDashboard({ loans, currentUser, onSubmitLoan, onUpdateLoan }: ApproverDashboardProps) {
+export function ApproverDashboard({ currentUser }: ApproverDashboardProps) {
   const [selectedLoan, setSelectedLoan] = useState<LoanRecord | null>(null);
+  const [actionRequired, setActionRequired] = useState<LoanRecord[]>([]);
+  const [inProgress, setInProgress] = useState<LoanRecord[]>([]);
+  const [completed, setCompleted] = useState<LoanRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const myLoans = loans.filter(l => l.approverId === currentUser.id);
-  const actionRequired = myLoans.filter(l => l.status === 'Action Required');
-  const inProgress = myLoans.filter(l => 
-    l.status === 'Unassigned' || l.status === 'In Progress' || l.status === 'On Hold'
-  );
-  const completed = myLoans.filter(l => l.status === 'Completed');
+  const refreshLoans = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const [actionRequiredLoans, inProgressLoans, onHoldLoans, completedLoans] = await Promise.all([
+        fetchLoanQueue('action-required'),
+        fetchLoanQueue('in-progress'),
+        fetchLoanQueue('on-hold'),
+        fetchLoanQueue('completed'),
+      ]);
+
+      setActionRequired(actionRequiredLoans);
+      setInProgress([...inProgressLoans, ...onHoldLoans].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()));
+      setCompleted(completedLoans);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load the approval queue.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLoans = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const [actionRequiredLoans, inProgressLoans, onHoldLoans, completedLoans] = await Promise.all([
+          fetchLoanQueue('action-required'),
+          fetchLoanQueue('in-progress'),
+          fetchLoanQueue('on-hold'),
+          fetchLoanQueue('completed'),
+        ]);
+
+        if (!cancelled) {
+          setActionRequired(actionRequiredLoans);
+          setInProgress([...inProgressLoans, ...onHoldLoans].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime()));
+          setCompleted(completedLoans);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : 'Unable to load the approval queue.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadLoans();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.id]);
 
   const getStatusIcon = (status: LoanRecord['status']) => {
     switch (status) {
@@ -58,7 +114,10 @@ export function ApproverDashboard({ loans, currentUser, onSubmitLoan, onUpdateLo
         loan={selectedLoan}
         currentUser={currentUser}
         onBack={() => setSelectedLoan(null)}
-        onUpdate={onUpdateLoan}
+        onChanged={async () => {
+          setSelectedLoan(null);
+          await refreshLoans();
+        }}
       />
     );
   }
@@ -143,10 +202,16 @@ export function ApproverDashboard({ loans, currentUser, onSubmitLoan, onUpdateLo
         </TabsList>
 
         <TabsContent value="new">
-          <InstructionBuilder currentUser={currentUser} onSubmit={onSubmitLoan} />
+          <InstructionBuilder currentUser={currentUser} onSubmitted={() => void refreshLoans()} />
         </TabsContent>
 
         <TabsContent value="tracking" className="space-y-4">
+          {error && !loading && actionRequired.length === 0 && inProgress.length === 0 && completed.length === 0 ? (
+            <Card>
+              <CardContent className="p-6 text-sm text-muted-foreground">{error}</CardContent>
+            </Card>
+          ) : null}
+
           {actionRequired.length > 0 && (
             <Card className="border-red-200 bg-red-50">
               <CardHeader>
@@ -191,6 +256,10 @@ export function ApproverDashboard({ loans, currentUser, onSubmitLoan, onUpdateLo
           </Card>
         </TabsContent>
       </Tabs>
+
+      {loading && actionRequired.length === 0 && inProgress.length === 0 && completed.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Loading approval queue...</p>
+      ) : null}
     </div>
   );
 }
