@@ -9,6 +9,7 @@ export interface ApprovedPersonnel {
 // Keep this list aligned with approved internal users.
 export const APPROVED_PERSONNEL: ApprovedPersonnel[] = [
   { email: 'wilbertboadzo144@gmail.com', name: 'Wilbert Boadzo', role: 'Final Approver' },
+  { email: 'michaelboadzo@gmail.com', name: 'Michael Boadzo', role: 'Final Approver' },
   { email: 'sarah.johnson@bayport.com', name: 'Sarah Johnson', role: 'Final Approver' },
   { email: 'michael.chen@bayport.com', name: 'Michael Chen', role: 'Final Approver' },
   { email: 'emily.davis@bayport.com', name: 'Emily Davis', role: 'Disbursement Officer' },
