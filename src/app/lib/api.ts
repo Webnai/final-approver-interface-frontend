@@ -204,6 +204,10 @@ function normalizePriority(value: unknown): Priority {
 function normalizeStatus(value: unknown): LoanStatus {
   const normalized = String(value ?? '').toLowerCase().replace(/[\s_-]/g, '');
 
+  if (normalized.includes('awaitingdisbursement')) {
+    return 'In Progress';
+  }
+
   if (normalized.includes('actionrequired')) {
     return 'Action Required';
   }
@@ -221,6 +225,26 @@ function normalizeStatus(value: unknown): LoanStatus {
   }
 
   return 'Unassigned';
+}
+
+function mapQueueFilterToBackendStatus(status: LoanQueueFilter) {
+  switch (status) {
+    case 'action-required':
+      return 'action_required';
+    case 'in-progress':
+      return 'awaiting_disbursement';
+    case 'on-hold':
+      return 'on_hold';
+    case 'completed':
+      return 'completed';
+    case 'unassigned':
+      return 'unassigned';
+    case 'mine':
+      return 'mine';
+    case 'all':
+    default:
+      return 'all';
+  }
 }
 
 function unwrapCollection<T>(payload: unknown): T[] {
@@ -427,7 +451,7 @@ export async function fetchSupervisorCapacity() {
 
 export async function fetchLoanQueue(status: LoanQueueFilter) {
   const payload = await requestJson<unknown>('/api/loans/queue', {
-    query: { status },
+    query: { status: mapQueueFilterToBackendStatus(status) },
   });
 
   return unwrapCollection<Record<string, unknown>>(payload).map(normalizeLoanRecord);
@@ -439,6 +463,19 @@ export async function submitLoanInstruction(payload: LoanInstructionPayload) {
     : String(payload.priority).toLowerCase().includes('high')
       ? 'high'
       : 'normal';
+
+  const checklist = {
+    idVerified: payload.checklist.idVerified,
+    id_verified: payload.checklist.idVerified,
+    collateralSigned: payload.checklist.collateralSigned,
+    collateral_signed: payload.checklist.collateralSigned,
+    sanctionsCheckCleared: payload.checklist.sanctionsCheckCleared,
+    sanctions_check_cleared: payload.checklist.sanctionsCheckCleared,
+    creditScoreVerified: payload.checklist.creditScoreVerified,
+    credit_score_verified: payload.checklist.creditScoreVerified,
+    kycCompleted: payload.checklist.kycCompleted,
+    kyc_completed: payload.checklist.kycCompleted,
+  };
 
   const requestPayload = {
     // Keep flat fields for backward compatibility with older API handlers.
@@ -454,7 +491,7 @@ export async function submitLoanInstruction(payload: LoanInstructionPayload) {
       approverId: payload.approverId,
       approverName: payload.approverName,
     },
-    checklist: payload.checklist,
+    checklist,
     priority: normalizedPriority,
     documents: [],
     finalApproverName: payload.approverName,

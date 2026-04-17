@@ -129,7 +129,7 @@ export function InstructionBuilder({ currentUser, onSubmitted }: InstructionBuil
                     id={item.key}
                     checked={checklist[item.key]}
                     onCheckedChange={(checked) => 
-                      setChecklist(prev => ({ ...prev, [item.key]: checked as boolean }))
+                      setChecklist(prev => ({ ...prev, [item.key]: checked === true }))
                     }
                   />
                   <label
