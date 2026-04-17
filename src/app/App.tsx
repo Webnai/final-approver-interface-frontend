@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
-import { Building2, UserCircle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { LogOut, UserCircle } from 'lucide-react';
+import bayportLogo from '@/public/Bayport-Financial-Services-Logo-2.png';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent } from '@/app/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs';
 import { Toaster } from '@/app/components/ui/sonner';
 import { LoanRecord, User } from '@/app/types/loan';
@@ -10,16 +11,15 @@ import { DashboardMetrics } from '@/app/components/DashboardMetrics';
 import { ApproverDashboard } from '@/app/components/ApproverDashboard';
 import { WorkQueue } from '@/app/components/WorkQueue';
 import { SupervisorView } from '@/app/components/SupervisorView';
-
-// Mock users
-const MOCK_USERS: User[] = [
-  { id: '1', name: 'Sarah Johnson', role: 'Final Approver' },
-  { id: '2', name: 'Michael Chen', role: 'Final Approver' },
-  { id: '3', name: 'Emily Davis', role: 'Disbursement Officer' },
-  { id: '4', name: 'James Wilson', role: 'Disbursement Officer' },
-  { id: '5', name: 'Lisa Anderson', role: 'Disbursement Officer' },
-  { id: '6', name: 'Robert Martinez', role: 'Supervisor' }
-];
+import { LoginScreen } from '@/app/components/LoginScreen';
+import { getApprovedPersonnelByEmail } from '@/app/config/approvedPersonnel';
+import { auth, isFirebaseConfigured } from '@/app/lib/firebase';
+import {
+  setAuthFromSession,
+  setAuthInitialized,
+  signOutUser,
+} from '@/app/store/authSlice';
+import { useAppDispatch, useAppSelector } from '@/app/store/hooks';
 
 // Generate some sample data
 const generateSampleLoans = (): LoanRecord[] => {
@@ -161,8 +161,56 @@ const generateSampleLoans = (): LoanRecord[] => {
 };
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User>(MOCK_USERS[0]);
+  const dispatch = useAppDispatch();
+  const { user: authenticatedUser, initialized } = useAppSelector((state) => state.auth);
   const [loans, setLoans] = useState<LoanRecord[]>([]);
+
+  const currentUser: User | null = useMemo(() => {
+    if (!authenticatedUser) {
+      return null;
+    }
+
+    return {
+      id: authenticatedUser.uid,
+      name: authenticatedUser.displayName,
+      role: authenticatedUser.role,
+    };
+  }, [authenticatedUser]);
+
+  useEffect(() => {
+    if (!auth || !isFirebaseConfigured) {
+      dispatch(setAuthInitialized(true));
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        dispatch(setAuthFromSession(null));
+        dispatch(setAuthInitialized(true));
+        return;
+      }
+
+      const approvedPersonnel = getApprovedPersonnelByEmail(firebaseUser.email);
+      if (!approvedPersonnel || !firebaseUser.email) {
+        await signOut(auth);
+        dispatch(setAuthFromSession(null));
+        dispatch(setAuthInitialized(true));
+        return;
+      }
+
+      dispatch(
+        setAuthFromSession({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          displayName: approvedPersonnel.name,
+          role: approvedPersonnel.role,
+        }),
+      );
+      dispatch(setAuthInitialized(true));
+    });
+
+    return unsubscribe;
+  }, [dispatch]);
 
   // Load loans from localStorage or use sample data
   useEffect(() => {
@@ -175,7 +223,7 @@ export default function App() {
         createdAt: new Date(loan.createdAt),
         claimedAt: loan.claimedAt ? new Date(loan.claimedAt) : undefined,
         completedAt: loan.completedAt ? new Date(loan.completedAt) : undefined,
-        comments: loan.comments.map((c: any) => ({
+        comments: (loan.comments ?? []).map((c: any) => ({
           ...c,
           timestamp: new Date(c.timestamp)
         }))
@@ -205,6 +253,10 @@ export default function App() {
   };
 
   const handleClaimLoan = (loanId: string) => {
+    if (!currentUser) {
+      return;
+    }
+
     setLoans(prev =>
       prev.map(loan =>
         loan.id === loanId
@@ -234,6 +286,23 @@ export default function App() {
     }
   };
 
+  if (!initialized) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white text-blue-700">
+        Loading authentication...
+      </div>
+    );
+  }
+
+  if (!authenticatedUser || !currentUser) {
+    return (
+      <>
+        <Toaster />
+        <LoginScreen />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Toaster />
@@ -243,7 +312,7 @@ export default function App() {
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Building2 className="h-8 w-8 text-blue-600" />
+              <img src={bayportLogo} alt="Bayport" className="h-10 w-auto object-contain" />
               <div>
                 <h1 className="text-2xl font-bold">Loan Disbursement System</h1>
                 <p className="text-sm text-muted-foreground">
@@ -265,25 +334,20 @@ export default function App() {
                   <div className="flex items-center gap-3">
                     <UserCircle className="h-10 w-10 text-blue-600" />
                     <div className="flex-1">
-                      <Select
-                        value={currentUser.id}
-                        onValueChange={(id) => {
-                          const user = MOCK_USERS.find(u => u.id === id);
-                          if (user) setCurrentUser(user);
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {MOCK_USERS.map(user => (
-                            <SelectItem key={user.id} value={user.id}>
-                              {user.name} - {user.role}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <p className="font-medium leading-none">{currentUser.name}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">{currentUser.role}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{authenticatedUser.email}</p>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Sign out"
+                      onClick={() => {
+                        dispatch(signOutUser());
+                      }}
+                    >
+                      <LogOut className="h-4 w-4" />
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
