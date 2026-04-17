@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Production
+/dist
+/build
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.prettierignore
+
+# Testing
+/coverage
+.nyc_output/
+*.lcov
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Misc
+.cache/
+.eslintcache
+*.pid
+*.seed
+*.pid.lock
+.turbo/
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build tools
+.parcel-cache
+.cache
+
+# Optional npm cache directory
+.npm
+
+# Lock files (if desired)
+# pnpm-lock.yaml
+# package-lock.json
+# yarn.lock
